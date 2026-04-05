@@ -1,0 +1,72 @@
+目标：在 Replit pnpm monorepo 中建立 OpenAI + Anthropic 双兼容反代 API 并发布。
+
+【环境准备】
+在 Replit Integrations 中添加 OpenAI 和 Anthropic AI 集成（通过 setupReplitAIIntegrations，自动注入 AI_INTEGRATIONS_OPENAI_BASE_URL、AI_INTEGRATIONS_OPENAI_API_KEY、AI_INTEGRATIONS_ANTHROPIC_BASE_URL、AI_INTEGRATIONS_ANTHROPIC_API_KEY，无需用户提供 API Key，费用计入 Replit 积分）
+通过 requestEnvVar 向用户请求 Secret：PROXY_API_KEY（任意字符串，作为 Bearer Token）；SESSION_SECRET 已存在则跳过
+【API Server 修改】
+文件：artifacts/api-server/src/routes/proxy.ts
+
+模型列表
+GET /v1/models：验证 Bearer Token，返回模型列表：
+OpenAI：gpt-5.2、gpt-5-mini、gpt-5-nano、o4-mini、o3
+Anthropic：claude-opus-4-6、claude-sonnet-4-6、claude-haiku-4-5
+POST /v1/chat/completions（OpenAI 兼容接口）
+验证 Authorization: Bearer ${PROXY_API_KEY}，失败返回 401
+按 model 前缀分发：gpt-/o 开头 → OpenAI client；claude- 开头 → Anthropic client
+完整 Tool Call 支持：
+透传 tools、tool_choice 给 OpenAI（原格式）
+Anthropic 工具格式双向转换：function.parameters ↔ input_schema；tool_choice 映射（required→any，具体函数→{type:"tool"}）
+消息转换：role:"tool" → Anthropic tool_result 内容块；assistant tool_calls → tool_use 块（JSON arguments 解析为 input 对象）
+响应转换：Anthropic tool_use 块 → OpenAI tool_calls；stop_reason:"tool_use" → finish_reason:"tool_calls"
+流式（stream=true）：
+设置 Content-Type: text/event-stream、X-Accel-Buffering: no，调用 res.flushHeaders()
+OpenAI 流：直接透传 chunk，每块 res.flush()
+Anthropic 流：将 content_block_start/delta/stop 转为 OpenAI chunk 格式，工具调用流式 input_json_delta → function.arguments 增量；每块 res.flush()
+每 5 秒发送 keepalive（": keepalive\n\n"），req.on("close") 时 clearInterval，try/finally 防止 500
+非流式（stream=false）：
+OpenAI 直接返回原始响应
+Anthropic 始终内部使用 messages.stream().finalMessage() 缓冲（Anthropic API 要求长请求必须使用流式，否则 10 分钟后报 500）
+返回 OpenAI 格式 JSON
+Express body limit 设为 50mb
+POST /v1/messages（Anthropic Messages 原生接口）
+同样验证 Bearer Token
+接受 Anthropic Messages API 原生请求格式（system、messages、tools、tool_choice、max_tokens、stream 等）
+Claude 模型：直接透传至 Anthropic（非流式内部用 stream().finalMessage()），流式转发所有原生 SSE 事件（message_start、content_block_start/delta/stop、ping、message_delta、message_stop）
+OpenAI 模型：
+消息格式转换：Anthropic messages → OpenAI messages（tool_result → role:"tool"，tool_use → tool_calls）
+工具格式转换：input_schema → parameters；tool_choice 映射
+响应格式转换：OpenAI response → Anthropic Message 格式（content[] 块、stop_reason、usage.input_tokens/output_tokens）
+流式时合成完整 Anthropic SSE 事件序列，包含工具调用块（content_block_start type tool_use + input_json_delta）
+文件：artifacts/api-server/src/app.ts
+
+app.use(express.json({ limit: "50mb" }));
+app.use(express.urlencoded({ extended: true, limit: "50mb" }));
+app.use("/api", router);
+app.use("/v1", proxyRouter);
+
+文件：artifacts/api-server/.replit-artifact/artifact.toml
+
+paths 数组加入 "/v1"（通过 verifyAndReplaceArtifactToml 更新，不直接编辑）
+依赖安装（在 artifacts/api-server/package.json dependencies 中）：
+
+openai: ^6
+@anthropic-ai/sdk: ^0.82
+
+【前端门户】
+用 createArtifact({ artifactType: "react-vite", slug: "api-portal", previewPath: "/", title: "API Portal" }) 创建 artifact
+
+App.tsx 功能（纯内联样式，深色主题 hsl(222,47%,11%)，无外部 UI 库依赖）：
+
+顶部 Header：图标 + 标题 + 在线状态指示器（fetch(/api/healthz) 检测，绿/红点 + 光晕）
+Connection Details 区块：Base URL（window.location.origin）、Auth Header 说明，各含复制按钮
+API Endpoints 区块：列出三个端点，显示 METHOD badge（GET 绿色/POST 紫色）、完整 URL、接口类型标签（OpenAI 蓝色 / Anthropic 橙色 / 两者灰色）、复制按钮，并附说明文字区分两种接口格式
+Available Models 区块：Grid 布局，每个 model 显示 ID + 提供商标签（OpenAI 蓝色 / Anthropic 橙色）
+CherryStudio 4 步设置指引：圆形序号（渐变色）+ 标题 + 描述，第 2 步注明可选 OpenAI 或 Anthropic 提供商类型
+Quick Test（curl 示例）：代码块带语法高亮色，整体可复制
+复制按钮（navigator.clipboard.writeText + 降级 fallback），复制后显示 "Copied!" 状态 2 秒
+Footer：技术栈说明
+【发布】
+重启 workflow：artifacts/api-server: API Server 和 artifacts/api-portal: web
+验证：curl localhost:80/v1/models -H "Authorization: Bearer $PROXY_API_KEY" 返回模型列表；无 Token 返回 401
+presentArtifact({ artifactId: "artifacts/api-portal" })
+suggestDeploy()
