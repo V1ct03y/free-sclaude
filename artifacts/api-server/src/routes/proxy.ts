@@ -215,7 +215,7 @@ router.post("/chat/completions", async (req: Request, res: Response) => {
     [key: string]: unknown;
   };
 
-  const { model, messages, stream, tools, tool_choice } = body;
+  const { model, messages, stream, tools, tool_choice, max_tokens: _mt, temperature, top_p, top_k, metadata, stop_sequences, thinking, ...restBody } = body;
 
   if (!model) {
     res.status(400).json({ error: { message: "model is required", type: "invalid_request_error" } });
@@ -287,6 +287,12 @@ router.post("/chat/completions", async (req: Request, res: Response) => {
             ...(system ? { system } : {}),
             ...(anthropicTools ? { tools: anthropicTools } : {}),
             ...(anthropicToolChoice ? { tool_choice: anthropicToolChoice } : {}),
+            ...(temperature !== undefined ? { temperature } : {}),
+            ...(top_p !== undefined ? { top_p: top_p as number } : {}),
+            ...(top_k !== undefined ? { top_k: top_k as number } : {}),
+            ...(metadata !== undefined ? { metadata: metadata as Anthropic.Messages.MessageStreamParams["metadata"] } : {}),
+            ...(stop_sequences !== undefined ? { stop_sequences: stop_sequences as string[] } : {}),
+            ...(thinking !== undefined ? { thinking: thinking as Anthropic.Messages.MessageStreamParams["thinking"] } : {}),
           };
 
           const anthropicStream = anthropic.messages.stream(streamParams);
@@ -388,6 +394,12 @@ router.post("/chat/completions", async (req: Request, res: Response) => {
           ...(system ? { system } : {}),
           ...(anthropicTools ? { tools: anthropicTools } : {}),
           ...(anthropicToolChoice ? { tool_choice: anthropicToolChoice } : {}),
+          ...(temperature !== undefined ? { temperature } : {}),
+          ...(top_p !== undefined ? { top_p: top_p as number } : {}),
+          ...(top_k !== undefined ? { top_k: top_k as number } : {}),
+          ...(metadata !== undefined ? { metadata: metadata as Anthropic.Messages.MessageStreamParams["metadata"] } : {}),
+          ...(stop_sequences !== undefined ? { stop_sequences: stop_sequences as string[] } : {}),
+          ...(thinking !== undefined ? { thinking: thinking as Anthropic.Messages.MessageStreamParams["thinking"] } : {}),
         };
 
         const finalMessage = await anthropic.messages.stream(streamParams).finalMessage();
@@ -420,8 +432,8 @@ router.post("/messages", async (req: Request, res: Response) => {
   if (!verifyBearer(req, res)) return;
 
   const body = req.body as AnthropicNativeMessage;
-  const { model, messages: anthropicMessages, system, tools, tool_choice, stream } = body;
-  const maxTokens = body.max_tokens ?? 8192;
+  const { model, messages: anthropicMessages, system, tools, tool_choice, stream, max_tokens, ...extraParams } = body;
+  const maxTokens = max_tokens ?? 8192;
 
   if (!model) {
     res.status(400).json({ error: { message: "model is required", type: "invalid_request_error" } });
@@ -451,6 +463,7 @@ router.post("/messages", async (req: Request, res: Response) => {
             ...(system ? { system } : {}),
             ...(tools ? { tools } : {}),
             ...(tool_choice ? { tool_choice } : {}),
+            ...(extraParams as Partial<Anthropic.Messages.MessageStreamParams>),
           };
 
           const anthropicStream = anthropic.messages.stream(streamParams);
@@ -472,6 +485,7 @@ router.post("/messages", async (req: Request, res: Response) => {
           ...(system ? { system } : {}),
           ...(tools ? { tools } : {}),
           ...(tool_choice ? { tool_choice } : {}),
+          ...(extraParams as Partial<Anthropic.Messages.MessageStreamParams>),
         };
         const finalMessage = await anthropic.messages.stream(streamParams).finalMessage();
         res.json(finalMessage);
