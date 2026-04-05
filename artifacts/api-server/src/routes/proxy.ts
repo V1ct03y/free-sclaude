@@ -33,7 +33,9 @@ const ALL_MODELS = [...OPENAI_MODELS, ...ANTHROPIC_MODELS];
 
 function verifyBearer(req: Request, res: Response): boolean {
   const auth = req.headers["authorization"] ?? "";
-  const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+  const bearerToken = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+  const xApiKey = (req.headers["x-api-key"] as string) ?? "";
+  const token = bearerToken || xApiKey;
   if (!token || token !== process.env.PROXY_API_KEY) {
     res.status(401).json({ error: { message: "Unauthorized", type: "authentication_error" } });
     return false;
